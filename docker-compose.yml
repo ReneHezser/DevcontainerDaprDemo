@@ -1,0 +1,91 @@
+version: '3.4'
+services:
+
+  rabbitmq:
+    image: rabbitmq
+    container_name: rabbitmq
+    ports:
+      - 5672:5672 
+      - 15672:15672
+    networks:
+      - hello-dapr
+  
+  demodatagenerator:
+    container_name: demo-data-generator
+    build: 
+      context: ./DemoDataGenerator
+    depends_on:
+      - rabbitmq
+    networks:
+      - hello-dapr
+  demodatagenerator-dapr:
+    image: daprio/daprd:edge
+    container_name: demo-data-generator_dapr
+    command: [
+      "./daprd",
+      "-app-id", "demodatagenerator",
+      "-app-port", "3500",
+      # Dapr's placement service can be reach via the docker DNS entry
+      "-placement-host-address", "placement:50006",
+      "-log-level", "debug",
+      # override the default path to map the volume mapped directory
+      "-components-path", "/components"
+    ]
+    volumes:
+      # Mount our components folder into the devcontainer
+      - ./.devcontainer/components/:/components 
+    depends_on:
+      - demodatagenerator
+    ports:
+      - 3500:3500
+    networks:
+      - hello-dapr
+
+
+  demosubscriber:
+    container_name: demo-subscriber
+    build:
+      context: ./DemoSubscriber
+    depends_on:
+      - rabbitmq
+      - placement
+    environment:
+      - "debug=express:*"
+    networks:
+      - hello-dapr
+    ports:
+      # Dapr instances communicate over gRPC so we need to expose the gRPC port
+      - 50001:50001
+  demosubscriber-dapr:
+    image: "daprio/daprd:edge"
+    container_name: demo-subscriber_dapr
+    command: [
+      "./daprd",
+      "-app-id", "demosubscriber",
+      "-app-port", "3000",
+      # Dapr's placement service can be reach via the docker DNS entry
+      "-placement-host-address", "placement:50006",
+      "-dapr-grpc-port", "50001",
+      "-log-level", "debug",
+      # override the default path to map the volume mapped directory
+      "-components-path", "/components"
+     ]
+    volumes:
+      # Mount our components folder for the runtime to use
+      - ./.devcontainer/components/:/components
+    depends_on:
+      - demosubscriber
+    network_mode: "service:demosubscriber"
+
+  placement:
+    image: "daprio/dapr"
+    container_name: placement
+    command: ["./placement", "-port", "50006", "--log-level", "debug",]
+    ports:
+      - "50006:50006"
+    networks:
+      - hello-dapr
+
+networks: 
+  hello-dapr:
+    name: hello-dapr

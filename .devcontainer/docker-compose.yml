@@ -1,0 +1,124 @@
+version: '3.7'
+services:
+  app:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+      args:
+        variant: 3.1
+
+    environment:
+      ASPNETCORE_Kestrel__Endpoints__Http__Url: http://*:5000
+      DAPR_NETWORK: hello-dapr
+
+    init: true
+    volumes:
+      # Forwards the local Docker socket to the container.
+      - /var/run/docker.sock:/var/run/docker-host.sock 
+      # Update this to wherever you want VS Code to mount the folder of your project
+      - ..:/workspace:cached
+      # map components from .devcontainer to the app container
+      - ./components/:/components
+
+    # Overrides default command so things don't shut down after the process ends.
+    entrypoint: /usr/local/share/docker-init.sh
+    command: sleep infinity 
+
+    # Uncomment the next four lines if you will use a ptrace-based debuggers like C++, Go, and Rust.
+    # cap_add:
+    #  - SYS_PTRACE
+    # security_opt:
+    #   - seccomp:unconfined
+
+    # Use "forwardPorts" in **devcontainer.json** to forward an app port locally. 
+    # (Adding the "ports" property to this file will not forward from a Codespace.)
+    # network_mode: "service:demodatagenerator"
+  
+  rabbitmq:
+    image: rabbitmq
+    container_name: rabbitmq
+    ports:
+      - 5672:5672 
+      - 15672:15672
+    networks:
+      - hello-dapr
+  
+  demodatagenerator:
+    container_name: demo-data-generator
+    build: 
+      context: ./../DemoDataGenerator
+    depends_on:
+      - rabbitmq
+    networks:
+      - hello-dapr
+  demodatagenerator-dapr:
+    image: daprio/daprd:edge
+    container_name: demo-data-generator_dapr
+    command: [
+      "./daprd",
+      "-app-id", "demodatagenerator",
+      "-app-port", "3500",
+      # Dapr's placement service can be reach via the docker DNS entry
+      "-placement-host-address", "placement:50006",
+      "-log-level", "debug",
+      # override the default path to map the volume mapped directory
+      "-components-path", "/components"
+    ]
+    volumes:
+      # Mount our components folder into the devcontainer
+      - ./components/:/components 
+    depends_on:
+      - demodatagenerator
+    ports:
+      - 3500:3500
+    networks:
+      - hello-dapr
+
+
+  demosubscriber:
+    container_name: demo-subscriber
+    build:
+      context: ./../DemoSubscriber
+    depends_on:
+      - rabbitmq
+      - placement
+    environment:
+      - "debug=express:*"
+    networks:
+      - hello-dapr
+    ports:
+      # Dapr instances communicate over gRPC so we need to expose the gRPC port
+      - 50001:50001
+  demosubscriber-dapr:
+    image: "daprio/daprd:edge"
+    container_name: demo-subscriber_dapr
+    command: [
+      "./daprd",
+      "-app-id", "demosubscriber",
+      "-app-port", "3000",
+      # Dapr's placement service can be reach via the docker DNS entry
+      "-placement-host-address", "placement:50006",
+      "-dapr-grpc-port", "50001",
+      "-log-level", "debug",
+      # override the default path to map the volume mapped directory
+      "-components-path", "/components"
+     ]
+    volumes:
+      # Mount our components folder for the runtime to use
+      - ./components/:/components
+    depends_on:
+      - demosubscriber
+    network_mode: "service:demosubscriber"
+
+  placement:
+    image: "daprio/dapr"
+    container_name: placement
+    command: ["./placement", "-port", "50006", "--log-level", "debug",]
+    ports:
+      - "50006:50006"
+    networks:
+      - hello-dapr
+
+networks: 
+  hello-dapr:
+    # name: hello-dapr
